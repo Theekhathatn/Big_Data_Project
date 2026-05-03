@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+
+# Airflow
+airflow.db
+airflow.cfg
+logs/
+*.pid
+airflow-*.err
+airflow-*.out
+airflow-scheduler.log
+simple_auth_manager_password*
+
+# React
+node_modules/
+build/
+.idea/
+.vscode/
+
+# ไฟล์ข้อมูล (ใหญ่เกินไป ไม่ควรขึ้น GitHub)
+data/raw/*.csv
+data/raw/H1/*.csv
+data/raw/H12/*.csv
+*.parquet
+
+# OS
+.DS_Store
+Thumbs.db
+
+# ไฟล์ Log
+*.log

@@ -1,0 +1,442 @@
+import {
+  Activity,
+  BarChart3,
+  Clock,
+  Globe,
+  Loader2,
+  RotateCw,
+  Target,
+  TrendingUp
+} from 'lucide-react';
+import { useEffect, useState } from 'react';
+import {
+  Area,
+  AreaChart,
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell, Line,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis, YAxis
+} from 'recharts';
+
+const App = () => {
+  const [rawData, setRawData] = useState([]);
+  const [displayData, setDisplayData] = useState([]);
+  const [selectedPair, setSelectedPair] = useState('EURUSD');
+  const [loading, setLoading] = useState(true);
+
+  // ✅ State สำหรับ Timeframe (default: d1)
+  const [timeframe, setTimeframe] = useState('d1');
+
+  const pairs = ['AUDCAD', 'AUDCHF', 'AUDUSD', 'EURCAD', 'EURUSD', 'GBPUSD', 'NZDCAD', 'USDCHF', 'USDJPY'];
+
+  // คำนวณ RSI
+  const calculateRSI = (data, period = 14) => {
+    if (!data || data.length === 0) return [];
+    if (data.length <= period) return Array(data.length).fill(50);
+    let results = Array(period).fill(50);
+    for (let i = period; i < data.length; i++) {
+      let up = 0, down = 0;
+      for (let j = i - period + 1; j <= i; j++) {
+        let diff = data[j].close - data[j - 1].close;
+        if (diff > 0) up += diff; else down -= diff;
+      }
+      let rs = (up / period) / (down / period || 1);
+      results.push(100 - (100 / (1 + rs)));
+    }
+    return results;
+  };
+
+  // คำนวณ EMA
+  const calculateEMA = (data, period = 20) => {
+    if (!data || data.length === 0) return [];
+    const k = 2 / (period + 1);
+    let ema = [data[0].close];
+    for (let i = 1; i < data.length; i++) {
+      ema.push(data[i].close * k + ema[i - 1] * (1 - k));
+    }
+    return ema;
+  };
+
+  // ✅ โหลดข้อมูลจาก API (รองรับ parameter tf)
+  useEffect(() => {
+    const loadData = async () => {
+      setLoading(true);
+      try {
+        const response = await fetch(`http://localhost:5000/api/data/${selectedPair}?limit=100&tf=${timeframe}`);
+        if (!response.ok) throw new Error('Failed to fetch data');
+        const data = await response.json();
+
+        const parsed = data.map(item => ({
+          time: parseInt(item.time),
+          open: parseFloat(item.open),
+          high: parseFloat(item.high),
+          low: parseFloat(item.low),
+          close: parseFloat(item.close),
+          tick_volume: parseFloat(item.tick_volume),
+          spread_raw: parseFloat(item.spread),
+          pair: item.pair
+        }));
+
+        setRawData(parsed);
+      } catch (e) {
+        console.error(`Error loading ${selectedPair} (${timeframe}):`, e);
+        setRawData([]);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadData();
+  }, [selectedPair, timeframe]);  // ✅ Re-fetch เมื่อเปลี่ยนคู่เงินหรือ timeframe
+
+  // ✅ ประมวลผลข้อมูลสำหรับแสดง
+  useEffect(() => {
+    if (rawData.length === 0) {
+      setDisplayData([]);
+      return;
+    }
+
+    const targetPair = selectedPair;
+    let filtered = rawData.filter(d => d.pair?.toUpperCase() === targetPair.toUpperCase());
+
+    if (filtered.length === 0) {
+      console.warn(`No data found for pair: ${targetPair}`);
+      setDisplayData([]);
+      return;
+    }
+
+    // เลือกข้อมูลล่าสุด 60 แถวสำหรับการคำนวณ
+    filtered = filtered.slice(-60);
+    const rsiValues = calculateRSI(filtered);
+    const emaValues = calculateEMA(filtered);
+
+    const processed = filtered.map((d, i) => {
+      const precision = d.pair?.includes('JPY') ? 3 : 5;
+      const spreadVal = d.pair?.includes('JPY') ? 0.015 : 0.00012;
+      const isBull = d.close > d.open;
+
+      return {
+        // ✅ แสดงวันที่แบบละเอียดสำหรับ H1
+        date: timeframe === 'h1'
+          ? new Date(d.time * 1000).toLocaleDateString('th-TH', {
+            day: '2-digit',
+            month: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit'
+          })
+          : new Date(d.time * 1000).toLocaleDateString('th-TH', {
+            day: '2-digit',
+            month: '2-digit'
+          }),
+        bid: parseFloat(d.close?.toFixed(precision)) || 0,
+        ask: parseFloat((d.close + spreadVal)?.toFixed(precision)) || 0,
+        rsi: rsiValues[i] || 50,
+        ema: emaValues[i] || d.close || 0,
+        delta: d.tick_volume * (isBull ? 0.25 : -0.25),
+        buyVol: isBull ? d.tick_volume * 0.65 : d.tick_volume * 0.40,
+        sellVol: isBull ? d.tick_volume * 0.35 : d.tick_volume * 0.60,
+        tick_volume: d.tick_volume || 0
+      };
+    }).slice(-30);  // แสดง 30 จุดล่าสุดในกราฟ
+
+    setDisplayData(processed);
+  }, [rawData, selectedPair, timeframe]);
+
+  // ข้อมูลล่าสุดสำหรับแสดงในการ์ด
+  const latest = displayData[displayData.length - 1] || {
+    bid: 0, ask: 0, delta: 0, buyVol: 0, sellVol: 0, rsi: 50, ema: 0, tick_volume: 0
+  };
+
+  // สีของ RSI ตามค่า
+  const getRSIColor = (val) => {
+    if (val > 70) return 'text-rose-500';
+    if (val < 30) return 'text-emerald-500';
+    return 'text-blue-400';
+  };
+
+  // Loading State
+  if (loading) return (
+    <div className="min-h-screen bg-[#080a0f] flex items-center justify-center">
+      <Loader2 className="text-blue-500 animate-spin" size={40} />
+      <span className="ml-3 text-slate-400">Loading {timeframe.toUpperCase()} data...</span>
+    </div>
+  );
+
+  return (
+    <div className="min-h-screen bg-[#080a0f] text-slate-200 p-4 md:p-6 font-sans">
+      <div className="max-w-7xl mx-auto">
+
+        {/* ========== HEADER ========== */}
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4">
+          {/* Logo & Title */}
+          <div className="flex items-center gap-3">
+            <div className="p-2.5 bg-blue-500/20 rounded-xl border border-blue-500/30">
+              <Activity className="text-blue-400" size={24} />
+            </div>
+            <div>
+              <h1 className="text-xl font-black text-white tracking-tight uppercase">FX Master Terminal</h1>
+              <div className="flex items-center gap-2">
+                <span className="flex h-2 w-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">
+                  {timeframe === 'h1' ? 'Hourly Data Active' : 'Daily Data Active'}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Controls: Timeframe + Pair Selector */}
+          <div className="flex items-center gap-3 bg-[#11141d] p-1.5 rounded-2xl border border-slate-800">
+
+            {/* Timeframe Selector */}
+            <div className="flex items-center gap-2 border-r border-slate-700 pr-3">
+              <Clock size={16} className="text-slate-500" />
+              <select
+                value={timeframe}
+                onChange={(e) => setTimeframe(e.target.value)}
+                className="bg-transparent border-none text-sm font-black text-white outline-none cursor-pointer uppercase"
+              >
+                <option value="d1" className="bg-[#11141d]">Daily (D1)</option>
+                <option value="h1" className="bg-[#11141d]">Hourly (H1)</option>
+              </select>
+            </div>
+
+            {/* Pair Selector */}
+            <Globe size={16} className="ml-3 text-slate-500" />
+            <select
+              value={selectedPair}
+              onChange={(e) => setSelectedPair(e.target.value)}
+              className="bg-transparent border-none text-sm font-black text-white outline-none cursor-pointer pr-4 uppercase"
+            >
+              {pairs.map(p => <option key={p} value={p} className="bg-[#11141d]">{p}</option>)}
+            </select>
+
+            {/* Refresh Button */}
+            <button
+              onClick={() => window.location.reload()}
+              className="bg-blue-600 hover:bg-blue-500 p-2 rounded-xl transition-all"
+              title="Refresh data"
+            >
+              <RotateCw size={16} />
+            </button>
+          </div>
+        </div>
+
+        {/* ========== STATS GRID ========== */}
+        <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 mb-6">
+
+          {/* Card 1: Bid/Ask Price */}
+          <div className="bg-[#11141d] p-5 rounded-3xl border border-slate-800 shadow-xl">
+            <div className="flex justify-between items-center mb-4">
+              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Price Quote</span>
+              <Target size={14} className="text-slate-600" />
+            </div>
+            <div className="space-y-3">
+              <div className="flex justify-between items-end">
+                <span className="text-xs text-slate-400 font-bold uppercase">Bid</span>
+                <span className="text-2xl font-mono font-black text-white leading-none">{latest.bid?.toLocaleString('en-US', { minimumFractionDigits: 5, maximumFractionDigits: 5 })}</span>
+              </div>
+              <div className="flex justify-between items-end">
+                <span className="text-xs text-slate-400 font-bold uppercase">Ask</span>
+                <span className="text-2xl font-mono font-black text-rose-500 leading-none">{latest.ask?.toLocaleString('en-US', { minimumFractionDigits: 5, maximumFractionDigits: 5 })}</span>
+              </div>
+              <div className="pt-2 border-t border-slate-800 flex justify-between text-[10px] font-bold uppercase text-slate-500">
+                <span>Spread</span>
+                <span>{((latest.ask - latest.bid) || 0).toFixed(5)}</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Card 2: RSI Indicator */}
+          <div className="bg-[#11141d] p-5 rounded-3xl border border-slate-800 shadow-xl">
+            <div className="flex justify-between items-center mb-4">
+              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Technical Index</span>
+              <TrendingUp size={14} className="text-blue-400" />
+            </div>
+            <p className={`text-4xl font-mono font-black mb-2 ${getRSIColor(latest.rsi)}`}>
+              {latest.rsi?.toFixed(2)}
+            </p>
+            <div className="h-1.5 w-full bg-slate-800 rounded-full overflow-hidden mb-3">
+              <div
+                className={`h-full transition-all duration-1000 ${latest.rsi > 70 ? 'bg-rose-500' :
+                  latest.rsi < 30 ? 'bg-emerald-500' :
+                    'bg-blue-500'
+                  }`}
+                style={{ width: `${latest.rsi || 0}%` }}
+              ></div>
+            </div>
+            <p className="text-[10px] font-bold text-slate-500 uppercase text-center">RSI (14-Period)</p>
+          </div>
+
+          {/* Card 3: Flow Sentiment */}
+          <div className="bg-[#11141d] p-5 rounded-3xl border border-slate-800 shadow-xl">
+            <div className="flex justify-between items-center mb-4">
+              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Flow Sentiment</span>
+              <BarChart3 size={14} className="text-amber-400" />
+            </div>
+            <div className="text-center">
+              <p className={`text-2xl font-mono font-black ${latest.delta > 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                {latest.delta > 0 ? '+' : ''}{Math.round(latest.delta || 0)}
+              </p>
+              <p className="text-[10px] font-bold text-slate-500 uppercase mt-1">Net Delta Flow</p>
+              <div className={`mt-3 py-1 rounded-lg text-[10px] font-black uppercase ${latest.delta > 0 ? 'bg-emerald-500/10 text-emerald-500' : 'bg-rose-500/10 text-rose-500'
+                }`}>
+                {latest.delta > 0 ? 'Accumulating' : 'Distributing'}
+              </div>
+            </div>
+          </div>
+
+          {/* Card 4: Volume */}
+          <div className="bg-[#11141d] p-5 rounded-3xl border border-slate-800 shadow-xl flex items-center justify-center">
+            <div className="text-center">
+              <p className="text-slate-500 text-sm">Volume Analysis</p>
+              <p className="text-2xl font-bold text-white">{latest.tick_volume?.toLocaleString('en-US') || 0}</p>
+              <p className="text-[10px] text-slate-500 uppercase mt-1">{timeframe === 'h1' ? 'Hourly Vol' : 'Daily Vol'}</p>
+            </div>
+          </div>
+        </div>
+
+        {/* ========== CHARTS AREA ========== */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
+
+          {/* Main Price Chart */}
+          <div className="lg:col-span-2 bg-[#11141d] p-6 rounded-[2.5rem] border border-slate-800 shadow-2xl">
+            <div className="flex justify-between items-center mb-8">
+              <h3 className="text-xs font-black text-white uppercase tracking-tighter flex items-center gap-2">
+                <div className="w-1.5 h-4 bg-blue-500 rounded-full"></div>
+                Bid-Ask & Technical Area
+              </h3>
+              <div className="flex gap-4 text-[9px] font-bold uppercase text-slate-500">
+                <span className="flex items-center gap-1"><div className="w-2 h-2 bg-blue-500 rounded-full"></div> Bid</span>
+                <span className="flex items-center gap-1"><div className="w-2 h-2 bg-rose-500 rounded-full"></div> Ask</span>
+                <span className="flex items-center gap-1"><div className="w-2 h-2 bg-amber-500 rounded-full"></div> EMA (20)</span>
+              </div>
+            </div>
+            <div className="h-[350px]">
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={displayData}>
+                  <defs>
+                    <linearGradient id="priceGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.15} />
+                      <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} opacity={0.2} />
+                  <XAxis
+                    dataKey="date"
+                    stroke="#475569"
+                    fontSize={9}
+                    axisLine={false}
+                    tickLine={false}
+                    interval={timeframe === 'h1' ? 4 : 'preserveEnd'}
+                  />
+                  <YAxis domain={['auto', 'auto']} hide />
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: '#0a0d14',
+                      borderRadius: '16px',
+                      border: '1px solid #1e293b',
+                      color: '#fff',
+                      fontSize: '12px'
+                    }}
+                    labelStyle={{ color: '#94a3b8' }}
+                  />
+                  <Area
+                    type="monotone"
+                    dataKey="bid"
+                    stroke="#3b82f6"
+                    strokeWidth={3}
+                    fill="url(#priceGrad)"
+                    name="Bid Price"
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="ask"
+                    stroke="#f43f5e"
+                    strokeWidth={1}
+                    dot={false}
+                    strokeDasharray="4 4"
+                    name="Ask Price"
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="ema"
+                    stroke="#f59e0b"
+                    strokeWidth={1.5}
+                    dot={false}
+                    strokeDasharray="2 2"
+                    name="EMA 20"
+                  />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+
+          {/* Order Flow Chart */}
+          <div className="bg-[#11141d] p-6 rounded-[2.5rem] border border-slate-800 shadow-2xl flex flex-col">
+            <div className="mb-8">
+              <h3 className="text-xs font-black text-white uppercase tracking-tighter flex items-center gap-2">
+                <div className="w-1.5 h-4 bg-amber-500 rounded-full"></div> Order Flow Analysis
+              </h3>
+            </div>
+            <div className="flex-1 min-h-[250px]">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={displayData}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} opacity={0.2} />
+                  <XAxis dataKey="date" hide />
+                  <YAxis hide />
+                  <Tooltip
+                    cursor={{ fill: '#1e293b', opacity: 0.4 }}
+                    contentStyle={{
+                      backgroundColor: '#0a0d14',
+                      border: 'none',
+                      borderRadius: '12px',
+                      fontSize: '12px'
+                    }}
+                  />
+                  <Bar dataKey="delta" radius={[4, 4, 0, 0]} name="Delta Flow">
+                    {displayData.map((entry, index) => (
+                      <Cell
+                        key={`cell-${index}`}
+                        fill={entry.delta > 0 ? '#10b981' : '#f43f5e'}
+                      />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+
+            {/* Trend Analysis Box */}
+            <div className="mt-4 p-4 bg-[#0a0d14] rounded-2xl border border-slate-800">
+              <div className="flex justify-between items-center mb-2">
+                <span className="text-[10px] font-bold text-slate-500 uppercase">Trend Alignment</span>
+                <span className={`text-[10px] font-black uppercase ${latest.bid > latest.ema ? 'text-blue-400' : 'text-rose-400'
+                  }`}>
+                  {latest.bid > latest.ema ? 'Price > EMA' : 'Price < EMA'}
+                </span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-[10px] font-bold text-slate-500 uppercase">Vol Bias</span>
+                <span className={`text-[10px] font-black uppercase ${latest.delta > 0 ? 'text-emerald-400' : 'text-rose-400'
+                  }`}>
+                  {latest.delta > 0 ? 'Bullish Flow' : 'Bearish Flow'}
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* ========== FOOTER ========== */}
+        <div className="text-center text-[10px] text-slate-600 py-4 border-t border-slate-800">
+          FX Master Terminal • Data Source: Flask API • Timeframe: {timeframe.toUpperCase()} •
+          Last Update: {new Date().toLocaleTimeString('th-TH')}
+        </div>
+
+      </div>
+    </div>
+  );
+};
+
+export default App;
