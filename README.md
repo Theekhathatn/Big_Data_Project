@@ -1,3 +1,6 @@
+ทีฆทัศน์ ทับเคลียว 6704800026
+ประณาลี ทารัตน์ 6704800001
+
 # โปรเจค Big Data - วิเคราะห์ข้อมูล Forex 📊
 
 ระบบวิเคราะห์ข้อมูล Forex ด้วย Apache Airflow, Flask API และ React Dashboard
